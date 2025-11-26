@@ -1,0 +1,80 @@
+<!-- src/templates/teacher/review.html -->
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row">
+  <div class="col-lg-7">
+    <div class="card card-hover">
+      <div class="card-header bg-success text-white">
+        <h4 class="mb-0">📝 Проверка работы</h4>
+        <small>Студент: <strong>{{ submission.user.name }}</strong> • Задание: {{ submission.assignment.title }}</small>
+      </div>
+      <div class="card-body">
+        {% if submission.file_path.endswith('.pdf') %}
+          <a href="/{{ submission.file_path }}" target="_blank" class="btn btn-primary mb-3">
+            <i class="bi bi-file-earmark-pdf me-2"></i> Открыть PDF
+          </a>
+        {% elif submission.file_path.endswith('.ipynb') %}
+          <a href="/{{ submission.file_path }}" target="_blank" class="btn btn-warning mb-3">
+            <i class="bi bi-journal-code me-2"></i> Открыть .ipynb
+          </a>
+        {% else %}
+          <a href="/{{ submission.file_path }}" class="btn btn-outline-secondary mb-3">
+            <i class="bi bi-download me-2"></i> Скачать файл
+          </a>
+        {% endif %}
+
+        <div class="alert alert-info">
+          <i class="bi bi-lightbulb me-2"></i>
+          <strong>Совет:</strong> Оставьте конкретную обратную связь — это помогает студенту расти.
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="col-lg-5">
+    <div class="card card-hover">
+      <div class="card-header">
+        <h5>Обратная связь</h5>
+      </div>
+      <div class="card-body">
+        <form 
+          hx-post="/teacher/review/{{ submission.id }}"
+          hx-target="#review-result"
+          hx-swap="innerHTML"
+        >
+          <div class="mb-3">
+            <label class="form-label">Оценка <small class="text-muted">(0–10)</small></label>
+            <input 
+              type="number" 
+              name="grade" 
+              class="form-control form-control-lg" 
+              min="0" 
+              max="10" 
+              value="8" 
+              required
+            >
+          </div>
+          
+          <div class="mb-3">
+            <label class="form-label">Комментарий</label>
+            <textarea 
+              name="feedback" 
+              class="form-control" 
+              rows="4" 
+              placeholder="Что сделано хорошо? Что улучшить? Примеры..."
+            >{{ "Хорошая реализация регрессии. Попробуйте добавить валидацию." if not submission.feedback else submission.feedback }}</textarea>
+          </div>
+          
+          <button type="submit" class="btn btn-success w-100 btn-grad text-white py-2">
+            <i class="bi bi-check-lg me-2"></i> Принять работу
+          </button>
+        </form>
+        
+        <div id="review-result" class="mt-3"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,52 @@
+<!-- src/templates/register.html -->
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="text-center mb-5">
+      <div class="display-4 mb-3">🎓</div>
+      <h1>EDU-Platform</h1>
+      <p class="lead text-muted">Единая среда для обучения без разрозненных платформ</p>
+    </div>
+
+    <div class="card card-hover shadow-sm">
+      <div class="card-body">
+        <h3 class="card-title text-center mb-4">Добро пожаловать</h3>
+        
+        <div class="d-grid gap-3">
+          <button 
+            class="btn btn-lg btn-outline-primary btn-grad text-white"
+            hx-post="/set-role"
+            hx-vals='{"role": "student"}'
+            hx-target="#role-form"
+            hx-swap="innerHTML"
+          >
+            <i class="bi bi-mortarboard me-2"></i> Я студент
+          </button>
+          
+          <button 
+            class="btn btn-lg btn-outline-success"
+            hx-post="/set-role"
+            hx-vals='{"role": "teacher"}'
+            hx-target="#role-form"
+            hx-swap="innerHTML"
+          >
+            <i class="bi bi-person-workspace me-2"></i> Я преподаватель
+          </button>
+        </div>
+
+        <div id="role-form" class="mt-4"></div>
+      </div>
+    </div>
+
+    <div class="text-center mt-4">
+      <small class="text-muted">
+        <i class="bi bi-shield-check"></i> 
+        Ваши данные защищены. Для MVP — без паролей.
+      </small>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
