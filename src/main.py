@@ -3,9 +3,10 @@ from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from database import SessionLocal
-from models import User, Course, Assignment, Submission
-from ml_recommender import SimpleRecommender
+from starlette.middleware.sessions import SessionMiddleware
+from .database import SessionLocal
+from .models import User, Course, Assignment, Submission
+from .ml_recommender import SimpleRecommender
 import os
 import shutil
 from pathlib import Path
@@ -13,6 +14,9 @@ from datetime import datetime
 
 # Инициализация
 app = FastAPI()
+
+app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
+
 templates = Jinja2Templates(directory="src/templates")
 
 # Папки

@@ -1,6 +1,6 @@
 # src/ml_recommender.py
 from typing import List, Dict
-from models import User
+from .models import User
 
 class SimpleRecommender:
     """

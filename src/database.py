@@ -1,7 +1,7 @@
 # src/database.py
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Base
+from .models import Base
 
 # Используем SQLite — 1 файл, не нужен сервер
 SQLALCHEMY_DATABASE_URL = "sqlite:///./db.sqlite"
