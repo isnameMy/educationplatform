@@ -1,0 +1,11 @@
+{% for mat in materials %}
+  {% if mat.content_type == "video" %}
+    <div class="ratio ratio-16x9 mb-4">
+      <iframe src="{{ mat.content_url }}" frameborder="0" allowfullscreen></iframe>
+    </div>
+  {% elif mat.content_type == "text" %}
+    <div class="card mb-4">
+      <div class="card-body">{{ mat.text_content | safe }}</div>
+    </div>
+  {% endif %}
+{% endfor %}

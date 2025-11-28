@@ -37,3 +37,14 @@ class Submission(Base):
     feedback = Column(Text, nullable=True)
     grade = Column(Integer, nullable=True)
     submitted_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Material(Base):
+    __tablename__ = "materials"
+    id = Column(Integer, primary_key=True)
+    course_id = Column(Integer, ForeignKey("courses.id"))
+    title = Column(String)
+    content_type = Column(String)  # "text", "video", "pdf"
+    content_url = Column(String)   # YouTube URL / путь к PDF
+    text_content = Column(Text, nullable=True)  # для текста
+    order = Column(Integer, default=0)
