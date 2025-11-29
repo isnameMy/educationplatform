@@ -52,6 +52,10 @@ def get_current_user(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
+    return templates.TemplateResponse("home.html", {"request": request})
+
+@app.get("/auth", response_class=HTMLResponse)
+async def register_page(request: Request):
     user = get_current_user(request)
     if user:
         return RedirectResponse(f"/{user.role}/dashboard", status_code=303)
