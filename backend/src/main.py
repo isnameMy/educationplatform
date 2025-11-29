@@ -86,8 +86,80 @@ async def set_role(request: Request, role: str = Form(...)):
 @app.post("/register", response_class=HTMLResponse)
 async def register(request: Request, email: str = Form(...), role: str = Form(...)):
     db = SessionLocal()
-    # Проверяем, есть ли уже
     user = db.query(User).filter(User.email == email).first()
+    
+    if user:
+        # 🔥 Проверяем: совпадает ли роль?
+        if user.role != role:
+            db.close()
+            return f"""
+            <!-- Modal для ошибки -->
+            <div class="modal fade show" id="errorModal" tabindex="-1" style="display: block; background: rgba(0,0,0,0.4);">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content border-0 shadow-lg">
+                  <div class="modal-header border-0 pb-0">
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body text-center py-4">
+                    <div class="mb-4">
+                      <div class="icon-circle bg-danger text-white mx-auto mb-3" style="width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-x-circle fs-1"></i>
+                      </div>
+                      <h4 class="mb-3">Роль уже занята</h4>
+                      <p class="text-muted">
+                        Пользователь с email <code>{email}</code> уже зарегистрирован как 
+                        <strong class="text-primary">{'студент' if user.role == 'student' else 'преподаватель'}</strong>.
+                      </p>
+                      <p class="text-muted small mt-3">
+                        <i class="bi bi-lightbulb me-1"></i>
+                        Используйте другой email или войдите под существующей ролью.
+                      </p>
+                    </div>
+                    <button 
+                      type="button" 
+                      class="btn btn-lg btn-primary px-5 py-2 mt-2"
+                      data-bs-dismiss="modal"
+                      hx-get="/" 
+                      hx-target="body" 
+                      hx-swap="outerHTML"
+                    >
+                      <i class="bi bi-arrow-left me-2"></i> Вернуться
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <style>
+              .icon-circle {{
+                background: linear-gradient(135deg, #ef4444, #b91c1c);
+              }}
+              .modal-content {{
+                border-radius: 16px;
+              }}
+              .modal.fade .modal-dialog {{
+                transform: translateY(0);
+                transition: transform 0.3s ease, opacity 0.3s ease;
+              }}
+              @keyframes modalIn {{
+                from {{ opacity: 0; transform: scale(0.95); }}
+                to {{ opacity: 1; transform: scale(1); }}
+              }}
+              .modal-content {{
+                animation: modalIn 0.3s ease-out;
+              }}
+            </style>
+            
+            <script>
+              document.getElementById('errorModal').addEventListener('click', function(e) {{
+                if (e.target === this) {{
+                  htmx.ajax('GET', '/', {{target: 'body', swap: 'outerHTML'}});
+                }}
+              }});
+            </script>
+            """
+
+    # Если пользователь новый, или роль совпадает — создаём/логиним
     if not user:
         name = email.split("@")[0].title()
         user = User(email=email, name=name, role=role)
@@ -99,26 +171,43 @@ async def register(request: Request, email: str = Form(...), role: str = Form(..
     request.session["user_id"] = user.id
     request.session["user_name"] = user.name
     request.session["user_role"] = user.role
-    
     db.close()
+    
     return RedirectResponse(f"/{user.role}/dashboard", status_code=303)
+
 
 # --- Студент ---
 @app.get("/student/dashboard", response_class=HTMLResponse)
 async def student_dashboard(request: Request, q: str = None):
+    user = get_current_user(request)
+    if not user or user.role != "student":
+        return RedirectResponse("/", status_code=303)
+
+    # Фильтрация
     if q:
-        q = q.lower()
-        courses = [
-            c for c in FAKE_COURSES
-            if q in c["title"].lower() or q in c["description"].lower()
-        ]
+        q = q.strip().lower()
+        courses = [c for c in FAKE_COURSES if q in c["title"].lower() or q in c["description"].lower()]
     else:
         courses = FAKE_COURSES
 
+    progress = 3
+    total = 5
+    recommendations = [
+        {"title": "FastAPI + HTMX", "reason": "Вы начали — углубитесь!"},
+    ]
+
+    # ✅ ВСЕГДА ВОЗВРАЩАЕМ ПОЛНУЮ СТРАНИЦУ
     return templates.TemplateResponse(
         "student/dashboard.html",
-        {"request": request, "courses": courses}
+        {
+            "request": request,
+            "courses": courses,
+            "progress": progress,
+            "total": total,
+            "recommendations": recommendations,
+        }
     )
+    
 
 import datetime
 
