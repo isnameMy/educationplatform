@@ -11,6 +11,9 @@ import os
 import shutil
 from pathlib import Path
 from datetime import datetime
+from fastapi import FastAPI, Request
+
+
 
 
 # Инициализация
@@ -19,6 +22,7 @@ app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 
 templates = Jinja2Templates(directory="../frontend/templates")
+
 
 # Папки
 UPLOAD_DIR = Path("uploads")
@@ -101,120 +105,132 @@ async def register(request: Request, email: str = Form(...), role: str = Form(..
 
 # --- Студент ---
 @app.get("/student/dashboard", response_class=HTMLResponse)
-async def student_dashboard(request: Request):
-    user = get_current_user(request)
-    if not user or user.role != "student":
-        return RedirectResponse("/", status_code=303)
-
-    db = SessionLocal()
-    
-    # Гарантируем, что есть хотя бы 1 курс
-    if db.query(Course).count() == 0:
-        course = Course(
-            title="Введение в машинное обучение",
-            description="Курс для начинающих: линейная регрессия, классификация, scikit-learn",
-            tags="ml,python,math"
-        )
-        db.add(course)
-        db.commit()
-        db.refresh(course)
-        
-        # Добавляем задания
-        assignments = [
-            Assignment(course_id=course.id, title="ДЗ 1: Линейная регрессия", description="Реализуйте на Python"),
-            Assignment(course_id=course.id, title="ДЗ 2: Классификация", description="Используйте scikit-learn"),
-            Assignment(course_id=course.id, title="ДЗ 3: Валидация", description="Кросс-валидация и метрики"),
+async def student_dashboard(request: Request, q: str = None):
+    if q:
+        q = q.lower()
+        courses = [
+            c for c in FAKE_COURSES
+            if q in c["title"].lower() or q in c["description"].lower()
         ]
-        db.add_all(assignments)
-        db.commit()
-
-    # Данные для студента
-    course = db.query(Course).first()
-    assignments = db.query(Assignment).filter(Assignment.course_id == course.id).all()
-    submissions = {s.assignment_id: s for s in db.query(Submission).filter(Submission.student_id == user.id).all()}
-    
-    completed = [a.id for a in assignments if submissions.get(a.id) and submissions[a.id].status == "reviewed"]
-    progress = len(completed)
-    total = len(assignments)
-
-    # Рекомендации
-    recommender = SimpleRecommender()
-    recommendations = recommender.recommend_for_user(completed)
-
-    db.close()
+    else:
+        courses = FAKE_COURSES
 
     return templates.TemplateResponse(
         "student/dashboard.html",
+        {"request": request, "courses": courses}
+    )
+
+import datetime
+
+@app.get("/student/course/{course_id}", response_class=HTMLResponse)
+async def student_course_detail(request: Request, course_id: int):
+    # Ищем курс в общем списке
+    course = next((c for c in FAKE_COURSES if c["id"] == course_id), None)
+    if not course:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Курс не найден"},
+            status_code=404
+        )
+
+    assignments = FAKE_ASSIGNMENTS.get(course_id, [])
+    submissions = {}
+    for aid, sub in FAKE_SUBMISSIONS.items():
+        if aid in [a["id"] for a in assignments]:
+            # Гарантируем, что есть submitted_at
+            sub_copy = sub.copy()
+            if "submitted_at" not in sub_copy:
+                sub_copy["submitted_at"] = datetime.datetime.now().strftime("%Y-%m-%d")
+            submissions[aid] = sub_copy
+
+    total = len(assignments)
+    progress = len([s for s in submissions.values() if s["status"] == "reviewed"])
+
+    recommendations = [
+        {"title": "Продвинутый курс по безопасности", "reason": "Рекомендуется после завершения"},
+    ]
+
+    return templates.TemplateResponse(
+        "student/course_detail.html",
         {
             "request": request,
-            "user": user,
             "course": course,
-            "assignments": assignments,
-            "submissions": submissions,
             "progress": progress,
             "total": total,
+            "assignments": assignments,
+            "submissions": submissions,
             "recommendations": recommendations,
         }
     )
 
 @app.get("/student/assignment/{assignment_id}", response_class=HTMLResponse)
-async def student_assignment(request: Request, assignment_id: int):
+async def view_assignment(request: Request, assignment_id: int):
     user = get_current_user(request)
     if not user:
         return RedirectResponse("/", status_code=303)
 
-    db = SessionLocal()
-    assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
-    submission = db.query(Submission).filter(
-        Submission.assignment_id == assignment_id,
-        Submission.student_id == user.id
-    ).first()
-    db.close()
+    # --- НАХОДИМ ЗАДАНИЕ ---
+    assignment = None
+    course_id = None
+    for cid, assigns in FAKE_ASSIGNMENTS.items():
+        for a in assigns:
+            if a["id"] == assignment_id:
+                assignment = a
+                course_id = cid
+                break
+        if assignment:
+            break
 
+    if not assignment:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Задание не найдено"},
+            status_code=404
+        )
+
+    # --- НАХОДИМ САБМИШЕН ---
+    submission = FAKE_SUBMISSIONS.get(assignment_id)
+
+    # --- ПЕРЕДАЁМ В ТВОЙ ШАБЛОН ---
     return templates.TemplateResponse(
-        "student/assignment.html",
-        {"request": request, "assignment": assignment, "submission": submission}
+        "student/assignment.html",  # ← твой файл!
+        {
+            "request": request,
+            "assignment": assignment,
+            "submission": submission,
+            # Если в шаблоне нужен course_id для "назад" — раскомментируй:
+            # "course_id": course_id
+        }
     )
 
-@app.post("/student/submit/{assignment_id}", response_class=HTMLResponse)
-async def submit_assignment(
-    request: Request,
-    assignment_id: int,
-    file: UploadFile = File(...)
-):
+@app.get("/student/course/{course_id}/material", response_class=HTMLResponse)
+async def course_material(request: Request, course_id: int):
     user = get_current_user(request)
     if not user:
-        raise HTTPException(status_code=403)
+        return RedirectResponse("/", status_code=303)
 
-    # Сохраняем файл
-    safe_filename = f"{user.id}_{assignment_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-    filepath = UPLOAD_DIR / safe_filename
-    with open(filepath, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    # Найти курс
+    course = next((c for c in FAKE_COURSES if c["id"] == course_id), None)
+    if not course:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Курс не найден"},
+            status_code=404
+        )
 
-    # Создаём сабмишен
-    db = SessionLocal()
-    submission = Submission(
-        assignment_id=assignment_id,
-        student_id=user.id,
-        file_path=str(filepath),
-        status="pending"
-    )
-    db.add(submission)
-    db.commit()
-    db.close()
-
-    return """
-    <div class="alert alert-info alert-dismissible fade show d-flex align-items-center" role="alert">
-      <i class="bi bi-hourglass-split fs-4 me-3"></i>
-      <div>
-        <strong>Работа отправлена на проверку!</strong><br>
-        <small>Преподаватель получит уведомление.</small>
-      </div>
-      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
+    # Добавь content, если хочешь (пока хардкод)
+    course["content"] = """
+        <h2>Введение в тему</h2>
+        <p>Это учебный материал курса. Тут может быть HTML, формулы, код и т.д.</p>
+        <pre><code>print("Hello, coal!")</code></pre>
     """
 
+    return templates.TemplateResponse(
+        "student/course_material.html",
+        {"request": request, "course": course}
+    )
+
+  
 # --- Преподаватель ---
 @app.get("/teacher/dashboard", response_class=HTMLResponse)
 async def teacher_dashboard(request: Request):
@@ -313,143 +329,120 @@ async def demo_data():
     db.add_all([student, teacher])
     db.commit()
     
-    # Курс с моковым контентом
-    course_content = """
-        <h2>Введение в машинное обучение</h2>
-        <p>Машинное обучение — это область искусственного интеллекта, которая позволяет системам автоматически обучаться и улучшаться на основе опыта.</p>
-
-        <h3>Основные понятия</h3>
-        <ul>
-        <li><strong>Обучение с учителем</strong> — алгоритм обучается на размеченных данных.</li>
-        <li><strong>Обучение без учителя</strong> — алгоритм ищет скрытые зависимости в данных.</li>
-        <li><strong>Обучение с подкреплением</strong> — агент учится принимать решения через награды.</li>
-        </ul>
-
-        <h3>Пример кода на Python</h3>
-        <pre><code>
-    import numpy as np
-    from sklearn.linear_model import LinearRegression
-
-    X = np.array([[1], [2], [3]])
-    y = np.array([2, 4, 6])
-
-    model = LinearRegression()
-    model.fit(X, y)
-        </code></pre>
-
-        <h3>Формула линейной регрессии</h3>
-        <p>$$ y = ax + b $$</p>
-
-        <h3>Полезные ссылки</h3>
-        <ul>
-        <li><a href="https://scikit-learn.org" target="_blank">Документация scikit-learn</a></li>
-        <li><a href="https://numpy.org" target="_blank">NumPy</a></li>
-        </ul>
-
-        <h3>Дополнительно</h3>
-        <p>Для более глубокого понимания рекомендуется ознакомиться с:</p>
-        <ul>
-        <li>Матричной формой линейной регрессии</li>
-        <li>Методом градиентного спуска</li>
-        <li>Функцией потерь (MSE)</li>
-        </ul>
-        """
-
-    course = Course(
-        title="Введение в машинное обучение",
-        description="Курс для начинающих: линейная регрессия, классификация, scikit-learn",
-        tags="ml,python,math",
-        content=course_content  # <-- Новое поле
-    )
-    db.add(course)
-    db.commit()
-    
-    # Задания
-    assignments = [
-        Assignment(course_id=course.id, title="ДЗ 1: Линейная регрессия", description="Реализуйте на Python"),
-        Assignment(course_id=course.id, title="ДЗ 2: Классификация", description="scikit-learn"),
-    ]
-    db.add_all(assignments)
-    db.commit()
-    
-    # Сабмишены
-    sub = Submission(
-        assignment_id=assignments[0].id,
-        student_id=student.id,
-        file_path="uploads/demo.pdf",
-        status="pending"
-    )
-    db.add(sub)
-    db.commit()
-    db.close()
-    
-    return "<h2>✅ Демо-данные созданы</h2><p><a href='/'>Вернуться</a></p>"
 
 
-
-# --- Страница материалов курса ---
-@app.get("/student/course/{course_id}", response_class=HTMLResponse)
-async def student_course_material(request: Request, course_id: int):
-    user = get_current_user(request)
-    if not user or user.role != "student":
-        return RedirectResponse("/", status_code=303)
-
-    db = SessionLocal()
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        # Если курс не найден — редирект на дашборд
-        db.close()
-        return RedirectResponse("/student/dashboard", status_code=303)
-
-    # (Опционально) Получим задания этого курса, чтобы показать ссылки
-    assignments = db.query(Assignment).filter(Assignment.course_id == course.id).all()
-
-    db.close()
-
-    return templates.TemplateResponse(
-        "student/course_material.html",
-        {
-            "request": request,
-            "user": user,
-            "course": course,
-            "assignments": assignments,
-        }
-    )
     
 
-@app.get("/course/{course_id}", response_class=HTMLResponse)
-async def course_page(request: Request, course_id: int):
-    user = get_current_user(request)
-    if not user:
-        return RedirectResponse("/", status_code=303)
 
-    db = SessionLocal()
-    try:
-        course = db.query(Course).filter(Course.id == course_id).first()
-        if not course:
-            return HTMLResponse("<div class='alert alert-danger'>Курс не найден</div>")
 
-        materials = (
-            db.query(Material)
-            .filter(Material.course_id == course_id)
-            .order_by(Material.order)
-            .all()
-        )
-        assignments = (
-            db.query(Assignment)
-            .filter(Assignment.course_id == course_id)
-            .all()
-        )
+# Временные данные — замени на БД позже
+# --- ГЛОБАЛЬНЫЕ ФЕЙКОВЫЕ ДАННЫЕ ---
+FAKE_COURSES = [
+    {"id": 1, "title": "Основы самовозгорания угля", "description": "Научись предсказывать пожары на шахтах"},
+    {"id": 2, "title": "React для чайников", "description": "С нуля до хакатона за 2 часа"},
+    {"id": 3, "title": "FastAPI + HTMX", "description": "Создай веб-сервис без боли"},
+    {"id": 4, "title": "ML для угольной промышленности", "description": "Предсказание рисков с нейросетями"},
+    {"id": 5, "title": "Безопасность в горных выработках", "description": "Методы предотвращения обвалов и взрывов"},
+    {"id": 6, "title": "Python для анализа данных", "description": "Pandas, NumPy, визуализация"},
+    {"id": 7, "title": "Основы вентиляции шахт", "description": "Контроль газа и температуры под землёй"},
+    {"id": 8, "title": "Docker для разработчиков", "description": "Контейнеризация от новичка до профи"},
+    {"id": 9, "title": "Механика горных пород", "description": "Изучение прочности и деформации массивов"},
+    {"id": 10, "title": "SQL и реляционные БД", "description": "От SELECT до сложных JOIN'ов"},
+    {"id": 11, "title": "Автоматизация добычи угля", "description": "Роботы, дроны и умные системы"},
+    {"id": 12, "title": "Git и управление версиями", "description": "Работа в команде без конфликтов"},
+    {"id": 13, "title": "Теплообмен в угольных пластах", "description": "Физические модели самовозгорания"},
+    {"id": 14, "title": "TypeScript в реальных проектах", "description": "Типизация, интерфейсы, продакшен"},
+    {"id": 15, "title": "Геоинформационные системы (ГИС)", "description": "Картография для горной промышленности"},
+    {"id": 16, "title": "REST API: design и best practices", "description": "Как проектировать API, которым приятно пользоваться"},
+    {"id": 17, "title": "Экология добычи полезных ископаемых", "description": "Снижение ущерба окружающей среде"},
+    {"id": 18, "title": "PostgreSQL для бэкенд-разработки", "description": "Индексы, транзакции, оптимизация"},
+    {"id": 19, "title": "Сенсорные сети для мониторинга шахт", "description": "IoT в условиях высокой опасности"},
+    {"id": 20, "title": "Алгоритмы и структуры данных", "description": "База для всех олимпиад и собесов"},
+    {"id": 21, "title": "Метановый контроль на шахтах", "description": "Детекция и предотвращение взрывов"},
+    {"id": 22, "title": "Тестирование на Python (pytest)", "description": "Unit, integration, mocking"},
+    {"id": 23, "title": "Гидрогеология угольных месторождений", "description": "Влияние воды на устойчивость пластов"},
+    {"id": 24, "title": "Frontend Performance Optimization", "description": "Как ускорить сайт до 90+ в Lighthouse"},
+    {"id": 25, "title": "Экономика горного производства", "description": "Рентабельность, затраты, ROI"},
+    {"id": 26, "title": "Аутентификация и авторизация", "description": "JWT, OAuth2, сессии, безопасность"},
+    {"id": 27, "title": "Моделирование рисков в добыче", "description": "Monte Carlo, сценарный анализ"},
+    {"id": 28, "title": "Linux для бэкенд-разработчика", "description": "Команды, процессы, сети, bash"},
+    {"id": 29, "title": "Транспорт угля: логистика и автоматизация", "description": "От забоя до порта"},
+    {"id": 30, "title": "Асинхронный Python (async/await)", "description": "FastAPI, aiohttp, производительность"},
+    {"id": 31, "title": "История угольной промышленности", "description": "От паровых машин до умных шахт"},
+    {"id": 32, "title": "CSS Grid и Flexbox", "description": "Макеты без бутстрапа"},
+    {"id": 33, "title": "Оценка запасов угля", "description": "Геологоразведка и подсчёт ресурсов"},
+    {"id": 34, "title": "WebSocket и реалтайм", "description": "Чаты, уведомления, дашборды"},
+    {"id": 35, "title": "Правила техники безопасности на шахтах", "description": "ГОСТы, инструктажи, экипировка"},
+    {"id": 36, "title": "Запуск MVP за выходные", "description": "HTMX, FastAPI, SQLite — без боли"},
+    {"id": 37, "title": "Геомеханика массивов горных пород", "description": "Прогноз устойчивости выработок"},
+    {"id": 38, "title": "React Query и управление состоянием", "description": "Забудь про Redux"},
+    {"id": 39, "title": "Переработка угля: коксование и газификация", "description": "От сырья до химии"},
+    {"id": 40, "title": "Миграции и Alembic", "description": "Управление схемой БД в FastAPI"},
+    {"id": 41, "title": "Энергосбережение в горной промышленности", "description": "Снижение затрат на вентиляцию и подъём"},
+    {"id": 42, "title": "Deploy FastAPI на сервер", "description": "Nginx, Gunicorn, systemd, HTTPS"},
+    {"id": 43, "title": "Подземная геофизика", "description": "Сейсморазведка и каротаж"},
+    {"id": 44, "title": "Jinja2 и серверный рендеринг", "description": "SEO-friendly интерфейсы без JS"},
+    {"id": 45, "title": "Углеродный след добычи", "description": "Углеродный аудит и компенсации"},
+    {"id": 46, "title": "CI/CD для веб-проектов", "description": "GitHub Actions, тесты, деплой"},
+    {"id": 47, "title": "Открытые данные о добыче", "description": "Росстат, US Energy, API"},
+    {"id": 48, "title": "Оптимизация запросов к БД", "description": "EXPLAIN, индексы, N+1 проблема"},
+    {"id": 49, "title": "Цифровой двойник шахты", "description": "BIM, 3D-модели, IoT-интеграция"},
+    {"id": 50, "title": "Как выиграть хакатон по горной тематике", "description": "Идеи, командная работа, презентация"},
+]
+FAKE_ASSIGNMENTS = {
+    1: [{"id": 101, "title": "Анализ температуры", "description": "Собери данные с датчиков"}],
+    2: [{"id": 201, "title": "Первый компонент", "description": "Создай кнопку в React"}],
+    3: [{"id": 301, "title": "Создай API", "description": "Напиши GET-эндпоинт"}],
+    4: [{"id": 401, "title": "Обучи модель", "description": "Используй данные по углям"}],
+    5: [{"id": 501, "title": "Оценка риска обвала", "description": "Рассчитай коэффициент устойчивости"}],
+    6: [{"id": 601, "title": "Анализ данных в Pandas", "description": "Очисти и визуализируй датасет"}],
+    7: [{"id": 701, "title": "Моделирование вентиляции", "description": "Спроектируй систему воздухообмена"}],
+    8: [{"id": 801, "title": "Создай Dockerfile", "description": "Упакуй приложение в контейнер"}],
+    9: [{"id": 901, "title": "Анализ прочности пород", "description": "Оцени напряжения в массиве"}],
+    10: [{"id": 1001, "title": "Сложный SQL-запрос", "description": "Напиши запрос с 3 JOIN'ами и агрегацией"}],
+    11: [{"id": 1101, "title": "Дизайн автоматизированной системы", "description": "Опиши архитектуру роботизированной добычи"}],
+    12: [{"id": 1201, "title": "Работа с ветками в Git", "description": "Создай feature-ветку и сделай PR"}],
+    13: [{"id": 1301, "title": "Тепловой расчёт", "description": "Смоделируй накопление тепла в угле"}],
+    14: [{"id": 1401, "title": "Типизация компонента", "description": "Добавь TypeScript к существующему коду"}],
+    15: [{"id": 1501, "title": "Создание карты месторождения", "description": "Используй QGIS или аналог"}],
+    16: [{"id": 1601, "title": "Проектирование REST API", "description": "Спроектируй эндпоинты для курса"}],
+    17: [{"id": 1701, "title": "Экологический аудит", "description": "Оцени воздействие на флору и фауну"}],
+    18: [{"id": 1801, "title": "Оптимизация запроса", "description": "Ускори медленный SQL-запрос в 10 раз"}],
+    19: [{"id": 1901, "title": "Дизайн сенсорной сети", "description": "Размести датчики по шахте для покрытия"}],
+    20: [{"id": 2001, "title": "Реализация хеш-таблицы", "description": "Напиши свою структуру данных на Python"}],
+    21: [{"id": 2101, "title": "Анализ концентрации метана", "description": "Построй график изменения по времени"}],
+    22: [{"id": 2201, "title": "Напиши unit-тесты", "description": "Покрой основную логику тестами"}],
+    23: [{"id": 2301, "title": "Гидрогеологический отчёт", "description": "Оцени влияние грунтовых вод"}],
+    24: [{"id": 2401, "title": "Оптимизация изображений", "description": "Сожми картинки без потери качества"}],
+    25: [{"id": 2501, "title": "Расчёт рентабельности", "description": "Посчитай окупаемость проекта"}],
+    26: [{"id": 2601, "title": "Реализация JWT-авторизации", "description": "Добавь защиту к API"}],
+    27: [{"id": 2701, "title": "Моделирование рисков", "description": "Проведи анализ сценариев в Excel"}],
+    28: [{"id": 2801, "title": "Напиши bash-скрипт", "description": "Автоматизируй развёртывание"}],
+    29: [{"id": 2901, "title": "Оптимизация логистики", "description": "Снизь затраты на транспортировку"}],
+    30: [{"id": 3001, "title": "Асинхронный эндпоинт", "description": "Реализуй обработку без блокировки"}],
+    31: [{"id": 3101, "title": "Исторический обзор", "description": "Напиши эссе о развитии промышленности"}],
+    32: [{"id": 3201, "title": "Адаптивная вёрстка", "description": "Сделай макет для мобильных"}],
+    33: [{"id": 3301, "title": "Оценка запасов", "description": "Рассчитай объём угля по данным бурения"}],
+    34: [{"id": 3401, "title": "Реалтайм-чат", "description": "Добавь WebSocket-уведомления"}],
+    35: [{"id": 3501, "title": "Инструктаж по ТБ", "description": "Создай чек-лист для новых сотрудников"}],
+    36: [{"id": 3601, "title": "Сборка MVP", "description": "Сделай рабочий прототип за 4 часа"}],
+    37: [{"id": 3701, "title": "Геомеханический расчёт", "description": "Оцени устойчивость выработки"}],
+    38: [{"id": 3801, "title": "Интеграция React Query", "description": "Замени ручные fetch'и на хуки"}],
+    39: [{"id": 3901, "title": "Технологическая схема", "description": "Нарисуй процесс переработки угля"}],
+    40: [{"id": 4001, "title": "Настройка миграций", "description": "Создай Alembic-миграцию для новой таблицы"}],
+    41: [{"id": 4101, "title": "Аудит энергопотребления", "description": "Найди точки для снижения затрат"}],
+    42: [{"id": 4201, "title": "Деплой на сервер", "description": "Настрой Nginx и Gunicorn"}],
+    43: [{"id": 4301, "title": "Интерпретация сейсмоданных", "description": "Выяви аномалии в массиве"}],
+    44: [{"id": 4401, "title": "Серверный рендеринг", "description": "Сделай SEO-дружественную страницу"}],
+    45: [{"id": 4501, "title": "Углеродный баланс", "description": "Рассчитай CO2-эмиссию процесса"}],
+    46: [{"id": 4601, "title": "GitHub Actions", "description": "Настрой CI для запуска тестов"}],
+    47: [{"id": 4701, "title": "Анализ открытых данных", "description": "Используй API Росстата для отчёта"}],
+    48: [{"id": 4801, "title": "Индексация таблицы", "description": "Ускорь запрос с помощью индекса"}],
+    49: [{"id": 4901, "title": "3D-модель шахты", "description": "Создай цифровой двойник в Blender"}],
+    50: [{"id": 5001, "title": "Подготовка демо", "description": "Собери презентацию для жюри хакатона"}],
+}
 
-        return templates.TemplateResponse(
-            "course.html",
-            {
-                "request": request,
-                "user": user,
-                "course": course,
-                "materials": materials,
-                "assignments": assignments,
-            }
-        )
-    finally:
-        db.close()
+
+FAKE_SUBMISSIONS = {
+    1: [{"id": 101, "title": "Анализ температуры", "description": "Собери данные с датчиков"}],
+}
