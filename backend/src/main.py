@@ -28,7 +28,6 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory="../frontend/static"), name="static")
 app.mount("/uploads", StaticFiles(directory="../frontend/uploads"), name="uploads")
 
-# Вспомогательные функции
 def get_db():
     db = SessionLocal()
     try:
@@ -53,53 +52,6 @@ async def home(request: Request):
     if user:
         return RedirectResponse(f"/{user.role}/dashboard", status_code=303)
     return templates.TemplateResponse("register.html", {"request": request})
-
-
-
-
-
-@app.get("/course/{course_id}", response_class=HTMLResponse)
-async def course_page(request: Request, course_id: int):
-    user = get_current_user(request)
-    if not user:
-        return RedirectResponse("/", status_code=303)
-
-    db = SessionLocal()
-    try:
-        course = db.query(Course).filter(Course.id == course_id).first()
-        if not course:
-            return HTMLResponse("<div class='alert alert-danger'>Курс не найден</div>")
-
-        materials = (
-            db.query(Material)
-            .filter(Material.course_id == course_id)
-            .order_by(Material.order)
-            .all()
-        )
-        assignments = (
-            db.query(Assignment)
-            .filter(Assignment.course_id == course_id)
-            .all()
-        )
-
-        return templates.TemplateResponse(
-            "course.html",
-            {
-                "request": request,
-                "user": user,
-                "course": course,
-                "materials": materials,
-                "assignments": assignments,
-            }
-        )
-    finally:
-        db.close()
-
-
-
-
-
-
 
 # --- Регистрация ---
 @app.post("/set-role", response_class=HTMLResponse)
@@ -349,71 +301,155 @@ async def demo_data():
     """Для быстрого заполнения БД (make demo-data)"""
     db = SessionLocal()
     
+    # Чистим
+    db.query(Submission).delete()
+    db.query(Assignment).delete()
+    db.query(Course).delete()
+    db.query(User).delete()
+    
+    # Пользователи
+    student = User(email="student@test.com", name="Алиса", role="student")
+    teacher = User(email="teacher@test.com", name="Борис", role="teacher")
+    db.add_all([student, teacher])
+    db.commit()
+    
+    # Курс с моковым контентом
+    course_content = """
+        <h2>Введение в машинное обучение</h2>
+        <p>Машинное обучение — это область искусственного интеллекта, которая позволяет системам автоматически обучаться и улучшаться на основе опыта.</p>
+
+        <h3>Основные понятия</h3>
+        <ul>
+        <li><strong>Обучение с учителем</strong> — алгоритм обучается на размеченных данных.</li>
+        <li><strong>Обучение без учителя</strong> — алгоритм ищет скрытые зависимости в данных.</li>
+        <li><strong>Обучение с подкреплением</strong> — агент учится принимать решения через награды.</li>
+        </ul>
+
+        <h3>Пример кода на Python</h3>
+        <pre><code>
+    import numpy as np
+    from sklearn.linear_model import LinearRegression
+
+    X = np.array([[1], [2], [3]])
+    y = np.array([2, 4, 6])
+
+    model = LinearRegression()
+    model.fit(X, y)
+        </code></pre>
+
+        <h3>Формула линейной регрессии</h3>
+        <p>$$ y = ax + b $$</p>
+
+        <h3>Полезные ссылки</h3>
+        <ul>
+        <li><a href="https://scikit-learn.org" target="_blank">Документация scikit-learn</a></li>
+        <li><a href="https://numpy.org" target="_blank">NumPy</a></li>
+        </ul>
+
+        <h3>Дополнительно</h3>
+        <p>Для более глубокого понимания рекомендуется ознакомиться с:</p>
+        <ul>
+        <li>Матричной формой линейной регрессии</li>
+        <li>Методом градиентного спуска</li>
+        <li>Функцией потерь (MSE)</li>
+        </ul>
+        """
+
+    course = Course(
+        title="Введение в машинное обучение",
+        description="Курс для начинающих: линейная регрессия, классификация, scikit-learn",
+        tags="ml,python,math",
+        content=course_content  # <-- Новое поле
+    )
+    db.add(course)
+    db.commit()
+    
+    # Задания
+    assignments = [
+        Assignment(course_id=course.id, title="ДЗ 1: Линейная регрессия", description="Реализуйте на Python"),
+        Assignment(course_id=course.id, title="ДЗ 2: Классификация", description="scikit-learn"),
+    ]
+    db.add_all(assignments)
+    db.commit()
+    
+    # Сабмишены
+    sub = Submission(
+        assignment_id=assignments[0].id,
+        student_id=student.id,
+        file_path="uploads/demo.pdf",
+        status="pending"
+    )
+    db.add(sub)
+    db.commit()
+    db.close()
+    
+    return "<h2>✅ Демо-данные созданы</h2><p><a href='/'>Вернуться</a></p>"
+
+
+
+# --- Страница материалов курса ---
+@app.get("/student/course/{course_id}", response_class=HTMLResponse)
+async def student_course_material(request: Request, course_id: int):
+    user = get_current_user(request)
+    if not user or user.role != "student":
+        return RedirectResponse("/", status_code=303)
+
+    db = SessionLocal()
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        # Если курс не найден — редирект на дашборд
+        db.close()
+        return RedirectResponse("/student/dashboard", status_code=303)
+
+    # (Опционально) Получим задания этого курса, чтобы показать ссылки
+    assignments = db.query(Assignment).filter(Assignment.course_id == course.id).all()
+
+    db.close()
+
+    return templates.TemplateResponse(
+        "student/course_material.html",
+        {
+            "request": request,
+            "user": user,
+            "course": course,
+            "assignments": assignments,
+        }
+    )
+    
+
+@app.get("/course/{course_id}", response_class=HTMLResponse)
+async def course_page(request: Request, course_id: int):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/", status_code=303)
+
+    db = SessionLocal()
     try:
-        # Чистим
-        db.query(Submission).delete()
-        db.query(Assignment).delete()
-        db.query(Material).delete()  # ← добавили очистку materials
-        db.query(Course).delete()
-        db.query(User).delete()
-        
-        # Пользователи
-        student = User(email="student@test.com", name="Алиса", role="student")
-        teacher = User(email="teacher@test.com", name="Борис", role="teacher")
-        db.add_all([student, teacher])
-        db.commit()
-        
-        # Единственный курс
-        course = Course(
-            title="Введение в машинное обучение",
-            description="Курс для начинающих",
-            tags="ml,python"
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            return HTMLResponse("<div class='alert alert-danger'>Курс не найден</div>")
+
+        materials = (
+            db.query(Material)
+            .filter(Material.course_id == course_id)
+            .order_by(Material.order)
+            .all()
         )
-        db.add(course)
-        db.commit()  # ← коммитим курс ОДИН РАЗ
-        
-        # === 🟢 МАТЕРИАЛЫ — сразу после курса ===
-        mat1 = Material(
-            course_id=course.id,
-            title="Видеолекция: Введение в ML",
-            content_type="video",
-            content_url="https://www.youtube.com/embed/aircAruvnKk",  # ← убрали пробелы в URL
-            order=1
+        assignments = (
+            db.query(Assignment)
+            .filter(Assignment.course_id == course_id)
+            .all()
         )
-        mat2 = Material(
-            course_id=course.id,
-            title="Текстовый конспект",
-            content_type="text",
-            text_content="<p><strong>Линейная регрессия</strong> — модель вида $y = wx + b$.</p>",
-            order=2
+
+        return templates.TemplateResponse(
+            "course.html",
+            {
+                "request": request,
+                "user": user,
+                "course": course,
+                "materials": materials,
+                "assignments": assignments,
+            }
         )
-        db.add_all([mat1, mat2])
-        # НЕ коммитим здесь — коммит будет ниже
-        
-        # Задания
-        assignments = [
-            Assignment(course_id=course.id, title="ДЗ 1: Линейная регрессия", description="Реализуйте на Python"),
-            Assignment(course_id=course.id, title="ДЗ 2: Классификация", description="scikit-learn"),
-        ]
-        db.add_all(assignments)
-        
-        # Сабмишены
-        sub = Submission(
-            assignment_id=assignments[0].id,
-            student_id=student.id,
-            file_path="uploads/demo.pdf",
-            status="pending"
-        )
-        db.add(sub)
-        
-        # ЕДИНСТВЕННЫЙ КОММИТ ВСЕХ ИЗМЕНЕНИЙ
-        db.commit()
-        
-        return "<h2>✅ Демо-данные созданы</h2><p><a href='/'>Вернуться</a></p>"
-    
-    except Exception as e:
-        db.rollback()
-        return f"<h2>❌ Ошибка: {str(e)}</h2>"
-    
     finally:
         db.close()
