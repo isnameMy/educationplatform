@@ -10,8 +10,5 @@ venv/
 # Database
 db.sqlite
 
-# Uploads (если не хочешь заливать, но для хакатона можно)
-uploads/
-
 # Environment variables
 .env
