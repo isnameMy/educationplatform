@@ -2,12 +2,23 @@
 {% extends "base.html" %}
 {% block content %}
 
-<!-- Секция "Сводка" -->
-<div class="card card-hover mb-4">
-  <div class="card-body">
-    <h2 class="card-title">{{ course.title }}</h2>
-    <p class="card-text text-muted">{{ course.description }}</p>
-    <p class="card-text"><small class="text-muted">Автор: {{ course.author or "Неизвестно" }}</small></p>
+<!-- Заголовок и фото курса -->
+<div class="row mb-4">
+  <!-- Фото курса -->
+  <div class="col-md-5">
+    <img 
+      src="/static/photo/logocours.png" 
+      class="img-fluid rounded shadow-sm"
+      alt="{{ course.title }}"
+      style="max-height: 300px; object-fit: cover;"
+    >
+  </div>
+
+  <!-- Описание курса -->
+  <div class="col-md-7">
+    <h2 class="mb-3">{{ course.title }}</h2>
+    <p class="text-muted mb-3">{{ course.description }}</p>
+    <p class="mb-1"><small class="text-muted">Автор: {{ course.author or "Неизвестно" }}</small></p>
 
     <!-- Прогресс -->
     <div class="mb-3">
@@ -19,52 +30,73 @@
         <div class="progress-bar" role="progressbar" style="width: {{ (progress / total * 100) if total > 0 else 0 }}%"></div>
       </div>
     </div>
-
-    <!-- Статистика -->
-    <div class="row">
-      <div class="col-md-4">
-        <div class="card bg-light">
-          <div class="card-body text-center">
-            <h5 class="card-title">{{ stats.videos or 0 }}</h5>
-            <p class="card-text">Видео</p>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="card bg-light">
-          <div class="card-body text-center">
-            <h5 class="card-title">{{ stats.assignments or 0 }}</h5>
-            <p class="card-text">Практик</p>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="card bg-light">
-          <div class="card-body text-center">
-            <h5 class="card-title">{{ stats.texts or 0 }}</h5>
-            <p class="card-text">Теории</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Кнопка "Перейти к первому модулю" -->
-    {% if first_module %}
-      <div class="d-grid gap-2 col-6 mx-auto mt-4">
-        <a href="/student/course/{{ course.id }}/module/{{ first_module.id }}" class="btn btn-primary btn-grad text-white py-2">
-          <i class="bi bi-journal-check me-2"></i> Начать курс
-        </a>
-      </div>
-    {% else %}
-      <div class="alert alert-info mt-4">
-        Модули для этого курса пока не добавлены.
-      </div>
-    {% endif %}
-
   </div>
 </div>
 
-<!-- Рекомендации (если есть) -->
+<!-- Информация о преподавателе -->
+<div class="card card-hover mb-4">
+  <div class="card-body">
+    <h5 class="mb-3">О преподавателе</h5>
+    <div class="d-flex align-items-start gap-3">
+      <img 
+        src="/static/photo/prepodpit.jpg" 
+        class="rounded-circle"
+        alt="Преподаватель"
+        style="width: 60px; height: 60px; object-fit: cover;"
+      >
+      <div>
+        <h6 class="mb-1">Броис Годный</h6>
+          <p class="mb-1"><i class="bi bi-envelope me-1"></i> boris.psb@educate.com </p>
+          <a href="https://t.me/treckpsb" target="_blank" class="text-decoration-none">
+            <i class="bi bi-telegram me-1"></i> Telegram-группа
+          </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Статистика -->
+<div class="row mb-4">
+  <div class="col-md-4 mb-3">
+    <div class="card bg-light h-100">
+      <div class="card-body text-center">
+        <h5 class="card-title">{{ stats.videos or 0 }}</h5>
+        <p class="card-text mb-0">Видео</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4 mb-3">
+    <div class="card bg-light h-100">
+      <div class="card-body text-center">
+        <h5 class="card-title">{{ stats.assignments or 0 }}</h5>
+        <p class="card-text mb-0">Практик</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4 mb-3">
+    <div class="card bg-light h-100">
+      <div class="card-body text-center">
+        <h5 class="card-title">{{ stats.texts or 0 }}</h5>
+        <p class="card-text mb-0">Теории</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Кнопка "Начать курс" -->
+{% if first_module %}
+  <div class="d-grid gap-2 col-6 mx-auto mb-4">
+    <a href="/student/course/{{ course.id }}/module/{{ first_module.id }}" class="btn btn-primary btn-grad text-white py-2">
+      <i class="bi bi-journal-check me-2"></i> Начать курс
+    </a>
+  </div>
+{% else %}
+  <div class="alert alert-info mb-4">
+    Модули для этого курса пока не добавлены.
+  </div>
+{% endif %}
+
+<!-- Рекомендации -->
 {% if recommendations %}
 <div class="card card-hover mb-4" style="background: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%); color: white;">
   <div class="card-body">

@@ -712,6 +712,9 @@ FAKE_COURSES = [
         "description": "Изучите Python и основные библиотеки для анализа данных: NumPy, Pandas, Matplotlib, Seaborn.",
         "tags": ["python", "data", "pandas", "numpy", "matplotlib", "seaborn"],
         "author": "Преподаватель К.",
+        "teacher_name": "Борис Петров",
+        "teacher_email": "boris@psb.edu",
+        "teacher_telegram": "https://t.me/psb_coal_course",
         "modules": [ # 15 модулей, как запланировано
             {
                 "id": 1,
@@ -870,7 +873,7 @@ FAKE_VIDEOS = [
         "title": "Видео: Введение в Python",
         "description": "Установка, Jupyter, основы синтаксиса.",
         "video_type": "youtube",
-        "video_url": "https://www.youtube.com/watch?v=8DvywoWv6fI" # Пример из предыдущего сообщения
+        "video_url": "https://rutube.ru/video/e14f344592fed5ab617689cda21cba66/?r=wd" # Пример из предыдущего сообщения
     },
     {
         "id": 2,
