@@ -44,12 +44,15 @@ def get_db():
 
 def get_current_user(request: Request):
     user_id = request.session.get("user_id")
+    print(f"DEBUG: Session user_id = {user_id}") # <-- ВРЕМЕННЫЙ ЛОГ
     if not user_id:
+        print("DEBUG: No user_id in session") # <-- ВРЕМЕННЫЙ ЛОГ
         return None
     # Используем сессию SQLAlchemy
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()
+        print(f"DEBUG: User found from DB: {user}, Role: {user.role if user else 'N/A'}") # <-- ВРЕМЕННЫЙ ЛОГ
     finally:
         db.close()
     return user
@@ -634,33 +637,49 @@ async def submit_assignment(
     try:
         # Проверяем, что задание существует
         assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
-        if not assignment or assignment.test_data: # Убедимся, что это не тест
-            return HTMLResponse(content="<div class='alert alert-danger'>Задание не найдено или предназначено для теста</div>, status_code=404")
+        if not assignment:
+            return HTMLResponse(content="<div class='alert alert-danger'>Задание не найдено</div>", status_code=404)
+
+        # Проверяем, что задание НЕ тест (т.е. test_data == None или пустой)
+        # Используем `or` для проверки None или пустой строки
+        if assignment.test_data:
+            return HTMLResponse(content="<div class='alert alert-danger'>Задание предназначено для теста, а не для файла</div>", status_code=400)
 
         # Создаём директорию uploads, если её нет
-        if not UPLOAD_DIR.exists():
-            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
         # Сохраняем файл
-        safe_filename = f"{user.id}_{assignment_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        safe_filename = f"{user.id}_{assignment_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
         filepath = UPLOAD_DIR / safe_filename
+        print(f"DEBUG: Attempting to save file to {filepath}") # <-- ВРЕМЕННЫЙ ЛОГ
+
         with open(filepath, "wb") as f:
             shutil.copyfileobj(file.file, f)
+        print(f"DEBUG: File saved successfully to {filepath}") # <-- ВРЕМЕННЫЙ ЛОГ
 
         # Создаём сабмишен в БД
         submission = Submission(
             assignment_id=assignment_id,
             student_id=user.id,
             file_path=str(filepath),
-            status="pending", # Для файла статус pending
+            status="pending",
             feedback="",
             grade=0
         )
         db.add(submission)
         db.commit()
-        db.refresh(submission)
+        # db.refresh(submission) # <-- УБРАН
 
+    except FileNotFoundError:
+        db.rollback()
+        print("ERROR: FileNotFoundError during file save") # <-- ВРЕМЕННЫЙ ЛОГ
+        return HTMLResponse(content="<div class='alert alert-danger'>Ошибка при сохранении файла на сервере (FileNotFoundError)</div>", status_code=500)
+    except OSError as e_os: # <-- Ловим более общую ошибку при работе с файлами
+        db.rollback()
+        print(f"ERROR: OSError during file save: {e_os}") # <-- ВРЕМЕННЫЙ ЛОГ
+        return HTMLResponse(content=f"<div class='alert alert-danger'>Ошибка при сохранении файла на сервере (OSError): {str(e_os)}</div>", status_code=500)
     except Exception as e:
+        print(f"ERROR: General exception in submit_assignment: {e}") # <-- ВРЕМЕННЫЙ ЛОГ
         db.rollback()
         # Лучше логировать ошибку: logger.error(f"Error submitting assignment: {e}")
         return HTMLResponse(content=f"<div class='alert alert-danger'>Ошибка при сохранении: {str(e)}</div>", status_code=500)
