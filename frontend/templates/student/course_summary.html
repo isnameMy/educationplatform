@@ -1,0 +1,64 @@
+<!-- frontend/templates/student/course_summary.html -->
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card card-hover mb-4">
+  <div class="card-body">
+    <h2 class="card-title">{{ course.title }}</h2>
+    <p class="card-text text-muted">{{ course.description }}</p>
+    <p class="card-text"><small class="text-muted">Автор: {{ course.author or "Неизвестно" }}</small></p>
+
+    {% if user %}
+      <!-- Прогресс (если студент записан) -->
+      <div class="mb-3">
+        <div class="d-flex justify-content-between mb-1">
+          <strong>Прогресс: {{ progress }} / {{ total_modules }} заданий</strong>
+          <span>{{ (progress / total_modules * 100) | round(1) if total_modules > 0 else 0 }}%</span>
+        </div>
+        <div class="progress" style="height: 12px;">
+          <div class="progress-bar" role="progressbar" style="width: {{ (progress / total_modules * 100) if total_modules > 0 else 0 }}%"></div>
+        </div>
+      </div>
+    {% endif %}
+
+    <!-- Статистика -->
+    <div class="row">
+      <div class="col-md-4">
+        <div class="card bg-light">
+          <div class="card-body text-center">
+            <h5 class="card-title">{{ stats.videos or 0 }}</h5>
+            <p class="card-text">Видео</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card bg-light">
+          <div class="card-body text-center">
+            <h5 class="card-title">{{ stats.assignments or 0 }}</h5>
+            <p class="card-text">Практик</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card bg-light">
+          <div class="card-body text-center">
+            <h5 class="card-title">{{ stats.texts or 0 }}</h5>
+            <p class="card-text">Теории</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Кнопка "Начать курс" или "К модулям" -->
+    {% if user %}
+      <div class="d-grid gap-2 col-6 mx-auto mt-4">
+        <a href="/student/course/{{ course.id }}/" class="btn btn-primary btn-grad text-white py-2">
+          <i class="bi bi-journal-check me-2"></i> Перейти к модулям
+        </a>
+      </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}

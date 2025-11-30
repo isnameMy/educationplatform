@@ -1,9 +1,9 @@
-# docker-compose.yml
 version: '3.8'
+
 services:
-  app:
+  backend:
     build: .
     ports:
       - "8000:8000"
-    volumes:
-      - ./frontend/uploads:/app/frontend/uploads  # сохраняем файлы между перезапусками
+    environment:
+      - PYTHONPATH=/app

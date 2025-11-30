@@ -5,14 +5,16 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from .database import SessionLocal
-from .models import User, Course, Assignment, Submission, Material
+from .models import User, Course, Assignment, Submission, Enrollment, Module, Video
+from sqlalchemy.orm import joinedload 
 from .ml_recommender import SimpleRecommender
 import os
 import shutil
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
-
+from .jinja_filters import from_json
+import json
 
 
 
@@ -22,6 +24,7 @@ app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 
 templates = Jinja2Templates(directory="../frontend/templates")
+templates.env.filters['from_json'] = from_json # <-- Регистрируем фильтр
 
 
 # Папки
@@ -43,9 +46,12 @@ def get_current_user(request: Request):
     user_id = request.session.get("user_id")
     if not user_id:
         return None
+    # Используем сессию SQLAlchemy
     db = SessionLocal()
-    user = db.query(User).filter(User.id == user_id).first()
-    db.close()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+    finally:
+        db.close()
     return user
 
 # === Роуты ===
@@ -213,117 +219,195 @@ async def student_dashboard(request: Request, q: str = None):
     )
     
 
-import datetime
+@app.get("/student/courses", response_class=HTMLResponse)
+async def student_courses(request: Request):
+    user = get_current_user(request)
+    if not user or user.role != "student":
+        return RedirectResponse("/", status_code=303)
+
+    db = SessionLocal()
+    try:
+        # Найти ID курсов, на которые записан студент
+        enrolled_course_ids = db.query(Enrollment.course_id).filter(Enrollment.user_id == user.id).all()
+        enrolled_course_ids = [e[0] for e in enrolled_course_ids] # список ID
+
+        # Получить курсы, на которые записан студент
+        enrolled_courses = db.query(Course).filter(Course.id.in_(enrolled_course_ids)).all()
+
+        # Получить все остальные курсы (для поиска/просмотра)
+        other_courses = db.query(Course).filter(~Course.id.in_(enrolled_course_ids)).all()
+    finally:
+        db.close()
+
+    return templates.TemplateResponse(
+        "student/courses.html",
+        {
+            "request": request,
+            "user": user,
+            "enrolled_courses": enrolled_courses,
+            "other_courses": other_courses,
+        }
+    )
 
 @app.get("/student/course/{course_id}", response_class=HTMLResponse)
 async def student_course_detail(request: Request, course_id: int):
-    # Ищем курс в общем списке
-    course = next((c for c in FAKE_COURSES if c["id"] == course_id), None)
-    if not course:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": "Курс не найден"},
-            status_code=404
-        )
+    user = get_current_user(request)
+    if not user or user.role != "student":
+        return RedirectResponse("/", status_code=303)
 
-    assignments = FAKE_ASSIGNMENTS.get(course_id, [])
-    submissions = {}
-    for aid, sub in FAKE_SUBMISSIONS.items():
-        if aid in [a["id"] for a in assignments]:
-            # Гарантируем, что есть submitted_at
-            sub_copy = sub.copy()
-            if "submitted_at" not in sub_copy:
-                sub_copy["submitted_at"] = datetime.datetime.now().strftime("%Y-%m-%d")
-            submissions[aid] = sub_copy
+    db = SessionLocal()
+    try:
+        # Проверяем, записан ли студент на курс
+        enrollment = db.query(Enrollment).filter(
+            Enrollment.user_id == user.id,
+            Enrollment.course_id == course_id
+        ).first()
+        if not enrollment:
+            return RedirectResponse("/", status_code=303)
 
-    total = len(assignments)
-    progress = len([s for s in submissions.values() if s["status"] == "reviewed"])
+        # Получаем курс
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            return templates.TemplateResponse(
+                "error.html",
+                {"request": request, "message": "Курс не найден"},
+                status_code=404
+            )
 
+        # Получаем *все* модули курса, чтобы посчитать прогресс и статистику
+        # Загружаем связанные assignment и video, чтобы избежать DetachedInstanceError
+        modules = db.query(Module).filter(Module.course_id == course_id).options(
+            joinedload(Module.assignment),
+            joinedload(Module.video)
+        ).order_by(Module.order).all()
+
+        # Подсчёт прогресса: сколько заданий (модулей типа "assignment") проверено
+        total_assignment_modules = len([m for m in modules if m.type == "assignment"])
+        completed_submissions = 0
+        for mod in modules:
+            if mod.type == "assignment" and mod.assignment:
+                # Найдём сабмишен *этого* студента для этого задания
+                student_submission = next((s for s in mod.assignment.submissions if s.student_id == user.id), None)
+                if student_submission and student_submission.status == "reviewed":
+                    completed_submissions += 1
+
+        progress = completed_submissions
+        total = total_assignment_modules
+
+        # Рассчитываем статистику: количество видео, заданий, текстов через БД
+        stats = {"videos": 0, "assignments": 0, "texts": 0}
+        for mod in modules:
+            if mod.type == "video":
+                stats["videos"] += 1
+            elif mod.type == "assignment":
+                stats["assignments"] += 1
+            elif mod.type == "text":
+                stats["texts"] += 1
+
+        # Найдём *первый* модуль, чтобы можно было сразу перейти к нему
+        first_module = modules[0] if modules else None
+
+    finally:
+        db.close()
+
+    # Найти рекомендации (если были)
     recommendations = [
         {"title": "Продвинутый курс по безопасности", "reason": "Рекомендуется после завершения"},
     ]
 
     return templates.TemplateResponse(
-        "student/course_detail.html",
+        "student/course_detail.html", # <-- Главный шаблон (только сводка)
         {
             "request": request,
+            "user": user,
             "course": course,
             "progress": progress,
             "total": total,
-            "assignments": assignments,
-            "submissions": submissions,
-            "recommendations": recommendations,
+            "stats": stats,
+            "first_module": first_module, # Передаём первый модуль
         }
     )
 
-@app.get("/student/assignment/{assignment_id}", response_class=HTMLResponse)
-async def view_assignment(request: Request, assignment_id: int):
+@app.get("/student/course/{course_id}/module/{module_id}", response_class=HTMLResponse)
+async def student_module_detail(request: Request, course_id: int, module_id: int):
     user = get_current_user(request)
-    if not user:
+    if not user or user.role != "student":
         return RedirectResponse("/", status_code=303)
 
-    # --- НАХОДИМ ЗАДАНИЕ ---
-    assignment = None
-    course_id = None
-    for cid, assigns in FAKE_ASSIGNMENTS.items():
-        for a in assigns:
-            if a["id"] == assignment_id:
-                assignment = a
-                course_id = cid
+    db = SessionLocal()
+    try:
+        # Проверяем, записан ли студент на курс
+        enrollment = db.query(Enrollment).filter(
+            Enrollment.user_id == user.id,
+            Enrollment.course_id == course_id
+        ).first()
+        if not enrollment:
+            return RedirectResponse("/student/courses", status_code=303)
+
+        # Получаем *все* модули курса, отсортированные по order, чтобы найти prev/next
+        # Загружаем связанные assignment и video
+        all_modules = db.query(Module).filter(
+            Module.course_id == course_id
+        ).options(
+            joinedload(Module.assignment).joinedload(Assignment.submissions),
+            joinedload(Module.video)
+        ).order_by(Module.order).all()
+
+        # Найдём текущий модуль в списке
+        current_module_index = -1
+        current_module = None
+        for i, mod in enumerate(all_modules):
+            if mod.id == module_id:
+                current_module = mod
+                current_module_index = i
                 break
-        if assignment:
-            break
 
-    if not assignment:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": "Задание не найдено"},
-            status_code=404
-        )
+        if not current_module:
+            return templates.TemplateResponse(
+                "error.html",
+                {"request": request, "message": "Модуль не найден"},
+                status_code=404
+            )
 
-    # --- НАХОДИМ САБМИШЕН ---
-    submission = FAKE_SUBMISSIONS.get(assignment_id)
+        # Получаем курс
+        course = current_module.course # Так как модуль уже загружен с курсом
 
-    # --- ПЕРЕДАЁМ В ТВОЙ ШАБЛОН ---
+        # Определим предыдущий и следующий модули
+        prev_module = all_modules[current_module_index - 1] if current_module_index > 0 else None
+        next_module = all_modules[current_module_index + 1] if current_module_index < len(all_modules) - 1 else None
+
+        # Если модуль — задание, получаем сабмишен
+        assignment = None
+        submission = None
+        if current_module.type == "assignment":
+            assignment = current_module.assignment # Уже загружен через joinedload
+            if assignment:
+                # Найдём сабмишен *этого* студента для этого задания
+                submission = next((s for s in assignment.submissions if s.student_id == user.id), None)
+
+        # Если модуль — видео, получаем данные видео
+        video = current_module.video if current_module.type == "video" else None # Уже загружен через joinedload
+
+    finally:
+        db.close()
+
     return templates.TemplateResponse(
-        "student/assignment.html",  # ← твой файл!
+        "student/module_base.html", # <-- Используем обновлённый шаблон
         {
             "request": request,
+            "user": user,
+            "course": course,
+            "module": current_module,
+            "prev_module": prev_module,
+            "next_module": next_module,
             "assignment": assignment,
             "submission": submission,
-            # Если в шаблоне нужен course_id для "назад" — раскомментируй:
-            # "course_id": course_id
+            "video": video,
         }
     )
 
-@app.get("/student/course/{course_id}/material", response_class=HTMLResponse)
-async def course_material(request: Request, course_id: int):
-    user = get_current_user(request)
-    if not user:
-        return RedirectResponse("/", status_code=303)
-
-    # Найти курс
-    course = next((c for c in FAKE_COURSES if c["id"] == course_id), None)
-    if not course:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": "Курс не найден"},
-            status_code=404
-        )
-
-    # Добавь content, если хочешь (пока хардкод)
-    course["content"] = """
-        <h2>Введение в тему</h2>
-        <p>Это учебный материал курса. Тут может быть HTML, формулы, код и т.д.</p>
-        <pre><code>print("Hello, coal!")</code></pre>
-    """
-
-    return templates.TemplateResponse(
-        "student/course_material.html",
-        {"request": request, "course": course}
-    )
-
-  
+    
+    
 # --- Преподаватель ---
 @app.get("/teacher/dashboard", response_class=HTMLResponse)
 async def teacher_dashboard(request: Request):
@@ -405,33 +489,310 @@ async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/", status_code=303)
 
-@app.get("/demo-data", response_class=HTMLResponse)
-async def demo_data():
-    """Для быстрого заполнения БД (make demo-data)"""
+    
+
+    
+@app.get("/student/assignment/{assignment_id}", response_class=HTMLResponse)
+async def view_assignment(request: Request, assignment_id: int):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/", status_code=303)
+
     db = SessionLocal()
-    
-    # Чистим
-    db.query(Submission).delete()
-    db.query(Assignment).delete()
-    db.query(Course).delete()
-    db.query(User).delete()
-    
-    # Пользователи
-    student = User(email="student@test.com", name="Алиса", role="student")
-    teacher = User(email="teacher@test.com", name="Борис", role="teacher")
-    db.add_all([student, teacher])
-    db.commit()
-    
+    try:
+        # --- НАХОДИМ ЗАДАНИЕ ---
+        assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+        if not assignment:
+            return templates.TemplateResponse(
+                "error.html",
+                {"request": request, "message": "Задание не найдено"},
+                status_code=404
+            )
 
+        # --- НАХОДИМ САБМИШЕН (для *этого* студента и *этого* задания) ---
+        submission = db.query(Submission).filter(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == user.id
+        ).first()
 
+        # --- ОБОГАЩАЕМ САБМИШЕН ДАННЫМИ КОДА И КОММЕНТАРИЯМИ (если есть) ---
+        if submission and submission.file_path:
+            try:
+                with open(submission.file_path, "r", encoding="utf-8") as f:
+                    code_content = f.read()
+                submission.code_content = code_content
+                submission.code_lines = code_content.splitlines()
+
+                # Подготавливаем словарь {line_number: comment_data} (пока пусто, добавим позже)
+                submission.code_comments_by_line = {}
+            except FileNotFoundError:
+                submission.code_content = "Файл с кодом не найден."
+                submission.code_lines = ["Файл с кодом не найден."]
+                submission.code_comments_by_line = {}
+
+    finally:
+        db.close()
+
+    return templates.TemplateResponse(
+        "student/module_assignment.html",
+        {
+            "request": request,
+            "user": user,
+            "assignment": assignment,
+            "submission": submission,
+        }
+    )
     
+    
+@app.post("/student/submit-test/{assignment_id}", response_class=HTMLResponse)
+async def submit_test(request: Request, assignment_id: int, answers: dict = None):
+    user = get_current_user(request)
+    if not user or user.role != "student":
+        return HTMLResponse(content="<div class='alert alert-danger'>Ошибка аутентификации</div>", status_code=403)
 
+    db = SessionLocal()
+    try:
+        # Проверяем, что задание (тест) существует
+        assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+        if not assignment or not assignment.test_data:
+            return HTMLResponse(content="<div class='alert alert-danger'>Тест не найден или не содержит данных</div>", status_code=404)
+
+        # Загружаем тестовые данные
+        test_data = json.loads(assignment.test_data)
+
+        # Проверяем, что пришли ответы
+        if not answers or 'answers' not in answers:
+             return HTMLResponse(content="<div class='alert alert-danger'>Не переданы ответы на тест</div>", status_code=400)
+
+        submitted_answers = answers['answers'] # Ожидаем, что это список индексов ответов [0, 2, ...]
+
+        # Проверяем количество вопросов
+        if len(submitted_answers) != len(test_data['questions']):
+            return HTMLResponse(content="<div class='alert alert-danger'>Количество переданных ответов не совпадает с количеством вопросов</div>", status_code=400)
+
+        # Подсчёт баллов
+        correct_count = 0
+        total_questions = len(test_data['questions'])
+        for i, question in enumerate(test_data['questions']):
+            if submitted_answers[i] == question['correct_answer']:
+                correct_count += 1
+
+        grade_percentage = (correct_count / total_questions) * 100
+
+        # Создаём сабмишен в БД (для теста file_path будет None)
+        submission = Submission(
+            assignment_id=assignment_id,
+            student_id=user.id,
+            file_path=None, # Для теста
+            status="reviewed", # Для теста сразу "проверен"
+            feedback=f"Тест пройден. Правильных ответов: {correct_count}/{total_questions}.",
+            grade=grade_percentage,
+            test_answers=json.dumps(submitted_answers) # Сохраняем ответы студента
+        )
+        db.add(submission)
+        db.commit()
+        db.refresh(submission)
+
+    except json.JSONDecodeError:
+        db.rollback()
+        return HTMLResponse(content="<div class='alert alert-danger'>Ошибка при разборе данных теста</div>", status_code=500)
+    except Exception as e:
+        db.rollback()
+        # Лучше логировать ошибку: logger.error(f"Error submitting test: {e}")
+        return HTMLResponse(content=f"<div class='alert alert-danger'>Ошибка при сохранении: {str(e)}</div>", status_code=500)
+    finally:
+        db.close()
+
+    # Возвращаем HTML-ответ для HTMX
+    return f"""
+    <div class="alert alert-success alert-dismissible fade show d-flex align-items-center" role="alert">
+      <i class="bi bi-check2-circle fs-4 me-3"></i>
+      <div>
+        <strong>Тест отправлен!</strong><br>
+        <small>Правильных ответов: {correct_count}/{total_questions} ({grade_percentage:.2f}%)</small>
+      </div>
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <script>
+      // Скрываем форму после успешной отправки
+      document.getElementById('submit-test-form').style.display = 'none';
+    </script>
+    """
+
+# --- СТАРЫЙ РОУТ ДЛЯ ОТПРАВКИ ФАЙЛА ---
+@app.post("/student/submit/{assignment_id}", response_class=HTMLResponse)
+async def submit_assignment(
+    request: Request,
+    assignment_id: int,
+    file: UploadFile = File(...)
+):
+    user = get_current_user(request)
+    if not user or user.role != "student":
+        return HTMLResponse(content="<div class='alert alert-danger'>Ошибка аутентификации</div>", status_code=403)
+
+    db = SessionLocal()
+    try:
+        # Проверяем, что задание существует
+        assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+        if not assignment or assignment.test_data: # Убедимся, что это не тест
+            return HTMLResponse(content="<div class='alert alert-danger'>Задание не найдено или предназначено для теста</div>, status_code=404")
+
+        # Создаём директорию uploads, если её нет
+        if not UPLOAD_DIR.exists():
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Сохраняем файл
+        safe_filename = f"{user.id}_{assignment_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        filepath = UPLOAD_DIR / safe_filename
+        with open(filepath, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        # Создаём сабмишен в БД
+        submission = Submission(
+            assignment_id=assignment_id,
+            student_id=user.id,
+            file_path=str(filepath),
+            status="pending", # Для файла статус pending
+            feedback="",
+            grade=0
+        )
+        db.add(submission)
+        db.commit()
+        db.refresh(submission)
+
+    except Exception as e:
+        db.rollback()
+        # Лучше логировать ошибку: logger.error(f"Error submitting assignment: {e}")
+        return HTMLResponse(content=f"<div class='alert alert-danger'>Ошибка при сохранении: {str(e)}</div>", status_code=500)
+    finally:
+        db.close()
+
+    # Возвращаем HTML-ответ для HTMX
+    return """
+    <div class="alert alert-info alert-dismissible fade show d-flex align-items-center" role="alert">
+      <i class="bi bi-hourglass-split fs-4 me-3"></i>
+      <div>
+        <strong>Работа отправлена на проверку!</strong><br>
+        <small>Преподаватель получит уведомление.</small>
+      </div>
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <script>
+      // Скрываем форму после успешной отправки
+      document.getElementById('submit-assignment-form').style.display = 'none';
+    </script>
+    """
 
 
 # Временные данные — замени на БД позже
 # --- ГЛОБАЛЬНЫЕ ФЕЙКОВЫЕ ДАННЫЕ ---
 FAKE_COURSES = [
-    {"id": 1, "title": "Основы самовозгорания угля", "description": "Научись предсказывать пожары на шахтах"},
+    {
+        "id": 1,
+        "title": "Python для анализа данных",
+        "description": "Изучите Python и основные библиотеки для анализа данных: NumPy, Pandas, Matplotlib, Seaborn.",
+        "tags": ["python", "data", "pandas", "numpy", "matplotlib", "seaborn"],
+        "author": "Преподаватель К.",
+        "modules": [ # 15 модулей, как запланировано
+            {
+                "id": 1,
+                "title": "Введение в Python и Jupyter",
+                "type": "text",
+                "content": "<h3>Установка Python</h3><p>Установите Python, pip, Jupyter Notebook...</p><h3>Основы синтаксиса</h3><p>Переменные, типы данных, циклы, функции...</p>"
+            },
+            {
+                "id": 2,
+                "title": "Библиотека NumPy",
+                "type": "text",
+                "content": "<h3>Создание массивов</h3><p>np.array, np.zeros, np.ones...</p><h3>Операции</h3><p>Индексация, срезы, математика...</p>"
+            },
+            {
+                "id": 3,
+                "title": "Практика: NumPy",
+                "type": "assignment",
+                "content": "<h3>Задание 1: NumPy</h3><p>Создайте массив, выполните математические операции, найдите мин/макс, срезайте данные.</p>",
+                "assignment_id": 1
+            },
+            {
+                "id": 4,
+                "title": "Библиотека Pandas",
+                "type": "text",
+                "content": "<h3>DataFrame и Series</h3><p>Создание, индексация (loc, iloc)...</p><h3>Чтение CSV</h3><p>pd.read_csv...</p>"
+            },
+            {
+                "id": 5,
+                "title": "Практика: Pandas #1",
+                "type": "assignment",
+                "content": "<h3>Задание 2: Pandas</h3><p>Загрузите CSV, выведите первые 5 строк, отфильтруйте по условию, посчитайте статистику.</p>",
+                "assignment_id": 2
+            },
+            {
+                "id": 6,
+                "title": "Визуализация с Matplotlib/Seaborn",
+                "type": "text",
+                "content": "<h3>Matplotlib</h3><p>plot, scatter, hist...</p><h3>Seaborn</h3><p>Введение в статистическую визуализацию...</p>"
+            },
+            {
+                "id": 7,
+                "title": "Практика: Визуализация",
+                "type": "assignment",
+                "content": "<h3>Задание 3: Визуализация</h3><p>Постройте 2-3 разных графика по данным из предыдущего задания.</p>",
+                "assignment_id": 3
+            },
+            {
+                "id": 8,
+                "title": "Очистка данных",
+                "type": "text",
+                "content": "<h3>Обработка NaN</h3><p>dropna, fillna...</p><h3>Удаление дубликатов</h3><p>drop_duplicates...</p>"
+            },
+            {
+                "id": 9,
+                "title": "Практика: Очистка данных",
+                "type": "assignment",
+                "content": "<h3>Задание 4: Очистка</h3><p>Возьмите 'грязный' датасет, примените методы очистки.</p>",
+                "assignment_id": 4
+            },
+            {
+                "id": 10,
+                "title": "Группировка и агрегация",
+                "type": "text",
+                "content": "<h3>groupby</h3><p>Использование...</p><h3>agg</h3><p>Функции агрегации...</p>"
+            },
+            {
+                "id": 11,
+                "title": "Практика: Группировка",
+                "type": "assignment",
+                "content": "<h3>Задание 5: Группировка</h3><p>Сгруппируйте данные по категории, посчитайте агрегаты.</p>",
+                "assignment_id": 5
+            },
+            {
+                "id": 12,
+                "title": "Объединение данных (merge/join)",
+                "type": "text",
+                "content": "<h3>pd.merge</h3><p>Соединение таблиц...</p><h3>pd.concat</h3><p>Объединение по осям...</p>"
+            },
+            {
+                "id": 13,
+                "title": "Практика: Объединение",
+                "type": "assignment",
+                "content": "<h3>Задание 6: Объединение</h3><p>Объедините 2 CSV-файла по ключу.</p>",
+                "assignment_id": 6
+            },
+            {
+                "id": 14,
+                "title": "Введение в анализ",
+                "type": "text",
+                "content": "<h3>Пример анализа</h3><p>Анализ реального датасета...</p><h3>Формулировка гипотез</h3><p>Как задавать вопросы данным...</p>"
+            },
+            {
+                "id": 15,
+                "title": "Финальный проект",
+                "type": "assignment",
+                "content": "<h3>Финальный проект</h3><p>Полный цикл анализа: загрузка, очистка, визуализация, выводы.</p>",
+                "assignment_id": 7
+            }
+        ]
+    },
     {"id": 2, "title": "React для чайников", "description": "С нуля до хакатона за 2 часа"},
     {"id": 3, "title": "FastAPI + HTMX", "description": "Создай веб-сервис без боли"},
     {"id": 4, "title": "ML для угольной промышленности", "description": "Предсказание рисков с нейросетями"},
@@ -482,60 +843,31 @@ FAKE_COURSES = [
     {"id": 49, "title": "Цифровой двойник шахты", "description": "BIM, 3D-модели, IoT-интеграция"},
     {"id": 50, "title": "Как выиграть хакатон по горной тематике", "description": "Идеи, командная работа, презентация"},
 ]
-FAKE_ASSIGNMENTS = {
-    1: [{"id": 101, "title": "Анализ температуры", "description": "Собери данные с датчиков"}],
-    2: [{"id": 201, "title": "Первый компонент", "description": "Создай кнопку в React"}],
-    3: [{"id": 301, "title": "Создай API", "description": "Напиши GET-эндпоинт"}],
-    4: [{"id": 401, "title": "Обучи модель", "description": "Используй данные по углям"}],
-    5: [{"id": 501, "title": "Оценка риска обвала", "description": "Рассчитай коэффициент устойчивости"}],
-    6: [{"id": 601, "title": "Анализ данных в Pandas", "description": "Очисти и визуализируй датасет"}],
-    7: [{"id": 701, "title": "Моделирование вентиляции", "description": "Спроектируй систему воздухообмена"}],
-    8: [{"id": 801, "title": "Создай Dockerfile", "description": "Упакуй приложение в контейнер"}],
-    9: [{"id": 901, "title": "Анализ прочности пород", "description": "Оцени напряжения в массиве"}],
-    10: [{"id": 1001, "title": "Сложный SQL-запрос", "description": "Напиши запрос с 3 JOIN'ами и агрегацией"}],
-    11: [{"id": 1101, "title": "Дизайн автоматизированной системы", "description": "Опиши архитектуру роботизированной добычи"}],
-    12: [{"id": 1201, "title": "Работа с ветками в Git", "description": "Создай feature-ветку и сделай PR"}],
-    13: [{"id": 1301, "title": "Тепловой расчёт", "description": "Смоделируй накопление тепла в угле"}],
-    14: [{"id": 1401, "title": "Типизация компонента", "description": "Добавь TypeScript к существующему коду"}],
-    15: [{"id": 1501, "title": "Создание карты месторождения", "description": "Используй QGIS или аналог"}],
-    16: [{"id": 1601, "title": "Проектирование REST API", "description": "Спроектируй эндпоинты для курса"}],
-    17: [{"id": 1701, "title": "Экологический аудит", "description": "Оцени воздействие на флору и фауну"}],
-    18: [{"id": 1801, "title": "Оптимизация запроса", "description": "Ускори медленный SQL-запрос в 10 раз"}],
-    19: [{"id": 1901, "title": "Дизайн сенсорной сети", "description": "Размести датчики по шахте для покрытия"}],
-    20: [{"id": 2001, "title": "Реализация хеш-таблицы", "description": "Напиши свою структуру данных на Python"}],
-    21: [{"id": 2101, "title": "Анализ концентрации метана", "description": "Построй график изменения по времени"}],
-    22: [{"id": 2201, "title": "Напиши unit-тесты", "description": "Покрой основную логику тестами"}],
-    23: [{"id": 2301, "title": "Гидрогеологический отчёт", "description": "Оцени влияние грунтовых вод"}],
-    24: [{"id": 2401, "title": "Оптимизация изображений", "description": "Сожми картинки без потери качества"}],
-    25: [{"id": 2501, "title": "Расчёт рентабельности", "description": "Посчитай окупаемость проекта"}],
-    26: [{"id": 2601, "title": "Реализация JWT-авторизации", "description": "Добавь защиту к API"}],
-    27: [{"id": 2701, "title": "Моделирование рисков", "description": "Проведи анализ сценариев в Excel"}],
-    28: [{"id": 2801, "title": "Напиши bash-скрипт", "description": "Автоматизируй развёртывание"}],
-    29: [{"id": 2901, "title": "Оптимизация логистики", "description": "Снизь затраты на транспортировку"}],
-    30: [{"id": 3001, "title": "Асинхронный эндпоинт", "description": "Реализуй обработку без блокировки"}],
-    31: [{"id": 3101, "title": "Исторический обзор", "description": "Напиши эссе о развитии промышленности"}],
-    32: [{"id": 3201, "title": "Адаптивная вёрстка", "description": "Сделай макет для мобильных"}],
-    33: [{"id": 3301, "title": "Оценка запасов", "description": "Рассчитай объём угля по данным бурения"}],
-    34: [{"id": 3401, "title": "Реалтайм-чат", "description": "Добавь WebSocket-уведомления"}],
-    35: [{"id": 3501, "title": "Инструктаж по ТБ", "description": "Создай чек-лист для новых сотрудников"}],
-    36: [{"id": 3601, "title": "Сборка MVP", "description": "Сделай рабочий прототип за 4 часа"}],
-    37: [{"id": 3701, "title": "Геомеханический расчёт", "description": "Оцени устойчивость выработки"}],
-    38: [{"id": 3801, "title": "Интеграция React Query", "description": "Замени ручные fetch'и на хуки"}],
-    39: [{"id": 3901, "title": "Технологическая схема", "description": "Нарисуй процесс переработки угля"}],
-    40: [{"id": 4001, "title": "Настройка миграций", "description": "Создай Alembic-миграцию для новой таблицы"}],
-    41: [{"id": 4101, "title": "Аудит энергопотребления", "description": "Найди точки для снижения затрат"}],
-    42: [{"id": 4201, "title": "Деплой на сервер", "description": "Настрой Nginx и Gunicorn"}],
-    43: [{"id": 4301, "title": "Интерпретация сейсмоданных", "description": "Выяви аномалии в массиве"}],
-    44: [{"id": 4401, "title": "Серверный рендеринг", "description": "Сделай SEO-дружественную страницу"}],
-    45: [{"id": 4501, "title": "Углеродный баланс", "description": "Рассчитай CO2-эмиссию процесса"}],
-    46: [{"id": 4601, "title": "GitHub Actions", "description": "Настрой CI для запуска тестов"}],
-    47: [{"id": 4701, "title": "Анализ открытых данных", "description": "Используй API Росстата для отчёта"}],
-    48: [{"id": 4801, "title": "Индексация таблицы", "description": "Ускорь запрос с помощью индекса"}],
-    49: [{"id": 4901, "title": "3D-модель шахты", "description": "Создай цифровой двойник в Blender"}],
-    50: [{"id": 5001, "title": "Подготовка демо", "description": "Собери презентацию для жюри хакатона"}],
-}
 
+FAKE_VIDEOS = [
+    {
+        "id": 1,
+        "course_id": 1,
+        "title": "Видео: Введение в Python",
+        "description": "Установка, Jupyter, основы синтаксиса.",
+        "video_type": "youtube",
+        "video_url": "https://www.youtube.com/watch?v=8DvywoWv6fI" # Пример из предыдущего сообщения
+    },
+    {
+        "id": 2,
+        "course_id": 1,
+        "title": "Видео: NumPy",
+        "description": "Создание массивов, операции.",
+        "video_type": "youtube",
+        "video_url": "https://www.youtube.com/watch?v=QUT1VHi_EJY"
+    },
+    {
+        "id": 3,
+        "course_id": 1,
+        "title": "Видео: Pandas",
+        "description": "DataFrame, Series, чтение CSV.",
+        "video_type": "youtube",
+        "video_url": "https://www.youtube.com/watch?v=vmEHCJofslg"
+    },
+]
 
-FAKE_SUBMISSIONS = {
-    1: [{"id": 101, "title": "Анализ температуры", "description": "Собери данные с датчиков"}],
-}

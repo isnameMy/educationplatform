@@ -1,0 +1,275 @@
+<!-- frontend/templates/student/module_base.html -->
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2>{{ course.title }}: {{ module.title }}</h2>
+</div>
+
+<!-- Навигация по модулям -->
+<div class="mb-3">
+  <div class="btn-group" role="group" aria-label="Навигация по модулям">
+    {% if prev_module %}
+      <a href="/student/course/{{ course.id }}/module/{{ prev_module.id }}" class="btn btn-outline-primary">
+        <i class="bi bi-arrow-left me-2"></i> {{ prev_module.title }}
+      </a>
+    {% else %}
+      <a class="btn btn-outline-primary disabled" tabindex="-1" aria-disabled="true">
+        <i class="bi bi-arrow-left me-2"></i> Нет
+      </a>
+    {% endif %}
+
+    <a href="/student/course/{{ course.id }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-up me-2"></i> Назад к курсу
+    </a>
+
+    {% if next_module %}
+      <a href="/student/course/{{ course.id }}/module/{{ next_module.id }}" class="btn btn-outline-primary">
+        {{ next_module.title }} <i class="bi bi-arrow-right me-2"></i>
+      </a>
+    {% else %}
+      <a class="btn btn-outline-primary disabled" tabindex="-1" aria-disabled="true">
+        Нет <i class="bi bi-arrow-right me-2"></i>
+      </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Содержимое модуля -->
+<div class="card card-hover">
+  <div class="card-body">
+    {% if module.type == "text" %}
+      <div class="module-content">
+        {{ module.content | safe }}
+      </div>
+    {% elif module.type == "assignment" %}
+      {% if assignment %}
+        <h3>{{ assignment.title }}</h3>
+        <p>{{ assignment.description | safe }}</p>
+        <!-- Вставка дедлайна -->
+        {% if assignment.deadline %}
+          <div class="alert alert-info" id="deadline-alert-module">
+            <i class="bi bi-clock me-2"></i>
+            <strong>Срок сдачи:</strong> {{ assignment.deadline.strftime('%d.%m.%Y %H:%M') }}
+            <span id="countdown-module" class="ms-2 fw-bold"></span>
+          </div>
+          <script>
+            const deadlineModule = new Date('{{ assignment.deadline.isoformat() }}');
+            const countdownElementModule = document.getElementById('countdown-module');
+            const alertElementModule = document.getElementById('deadline-alert-module');
+
+            function updateCountdownModule() {
+              const now = new Date();
+              const diff = deadlineModule - now;
+
+              if (diff <= 0) {
+                countdownElementModule.textContent = 'Срок истёк!';
+                alertElementModule.className = 'alert alert-danger';
+                return;
+              }
+
+              const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+              const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+              const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+              countdownElementModule.textContent = `${days}д ${hours}ч ${minutes}м`;
+
+              if (diff < 24 * 60 * 60 * 1000) {
+                alertElementModule.className = 'alert alert-warning';
+              }
+            }
+
+            updateCountdownModule();
+            setInterval(updateCountdownModule, 60000);
+          </script>
+        {% endif %}
+
+        <!-- Форма сдачи / Отображение сабмишена -->
+        {% if submission %}
+          {% if submission.status == "pending" %}
+            <div class="alert alert-warning">
+              <i class="bi bi-hourglass-split me-2"></i>
+              <strong>На проверке</strong>
+              <p class="mb-0 mt-2">Отправлено: {{ submission.submitted_at.strftime('%d.%m %H:%M') }}</p>
+            </div>
+          {% elif submission.status == "reviewed" %}
+            <div class="alert alert-success">
+              <i class="bi bi-check-circle me-2"></i>
+              <strong>Проверено! Оценка: {{ submission.grade }}{% if submission.grade != None %}{% if assignment.test_data %}%{% else %}/10{% endif %}{% endif %}</strong>
+              {% if submission.feedback %}
+                <p class="mt-2 mb-0">{{ submission.feedback }}</p>
+              {% endif %}
+            </div>
+            {% if submission.file_path %}
+              <a href="/{{ submission.file_path }}" class="btn btn-outline-secondary w-100 mb-2">
+                <i class="bi bi-file-earmark-arrow-down me-2"></i> Скачать работу
+              </a>
+            {% endif %}
+          {% endif %}
+        {% else %}
+          <!-- Проверяем, является ли задание тестом -->
+          {% if assignment.test_data %}
+            <!-- Форма для теста -->
+            <form
+              id="submit-test-form"
+              hx-post="/student/submit-test/{{ assignment.id }}" <!-- Путь к новому роуту -->
+              hx-target="#submit-result-module" <!-- Куда вставлять результат -->
+              hx-swap="innerHTML" <!-- Как вставить результат -->
+              class="mt-3"
+            >
+              {% set test_data = assignment.test_data | from_json %}
+              {% for question in test_data.questions %}
+                {% set outer_index = loop.index0 %} <!-- Запоминаем индекс вопроса -->
+                <div class="mb-3">
+                  <p><strong>{{ loop.index }}. {{ question.question }}</strong></p>
+                  {% for option in question.options %}
+                    <div class="form-check">
+                      <input
+                        class="form-check-input"
+                        type="radio"
+                        name="answers[{{ outer_index }}]" <!-- Имя поля: answers[0], answers[1], ... -->
+                        id="q{{ outer_index }}_opt{{ loop.index0 }}" <!-- Уникальный ID -->
+                        value="{{ loop.index0 }}" <!-- Значение: индекс ответа -->
+                        required
+                      >
+                      <label class="form-check-label" for="q{{ outer_index }}_opt{{ loop.index0 }}"> <!-- Уникальный for -->
+                        {{ option }}
+                      </label>
+                    </div>
+                  {% endfor %}
+                </div>
+              {% endfor %}
+              <button type="submit" class="btn btn-success w-100 btn-grad text-white">
+                <i class="bi bi-send-check me-2"></i> Отправить тест
+              </button>
+            </form>
+          {% else %}
+            <!-- Форма сдачи файла -->
+            <form
+              id="submit-assignment-form"
+              hx-post="/student/submit/{{ assignment.id }}"
+              hx-encoding="multipart/form-data"
+              hx-target="#submit-result-module"
+              hx-swap="innerHTML"
+              class="mt-3"
+            >
+              <label class="form-label">Загрузите файл</label>
+              <div class="dropzone" id="dropzone-module">
+                <i class="bi bi-cloud-upload fs-1 mb-3 text-muted"></i>
+                <p class="text-muted">Перетащите файл сюда<br><small>.py, .ipynb, .pdf</small></p>
+                <input
+                  type="file"
+                  name="file"
+                  class="form-control d-none"
+                  id="file-input-module"
+                  accept=".py,.ipynb,.pdf"
+                  required
+                >
+                <button type="button" class="btn btn-outline-primary mt-2" onclick="document.getElementById('file-input-module').click()">
+                  Выбрать файл
+                </button>
+              </div>
+
+              <button type="submit" class="btn btn-success w-100 mt-3 btn-grad text-white">
+                <i class="bi bi-send-check me-2"></i> Отправить на проверку
+              </button>
+            </form>
+          {% endif %}
+          <!-- Контейнер для результата HTMX -->
+          <div id="submit-result-module" class="mt-3"></div>
+        {% endif %}
+
+      {% else %}
+        <p>Ошибка: Задание для этого модуля не найдено.</p>
+      {% endif %}
+    {% elif module.type == "video" %}
+      {% if video %}
+        <h3>{{ video.title }}</h3>
+        <p>{{ video.description }}</p>
+        {% if video.video_type == "rutube" and video.video_url %}
+          <!-- Встраивание RuTube видео -->
+          <div class="ratio ratio-16x9">
+            <iframe src="{{ video.video_url }}" frameborder="0" allowfullscreen></iframe>
+          </div>
+        {% elif video.video_type == "embedded_mp4" and video.video_url %}
+          <div class="ratio ratio-16x9">
+            <video controls width="100%" poster="https://via.placeholder.com/800x450/4361ee/white?text={{ video.title|urlencode }}">
+              <source src="{{ video.video_url }}" type="video/mp4">
+              Ваш браузер не поддерживает видео.
+            </video>
+          </div>
+        {% elif video.video_type == "youtube" and video.video_url %}
+          <div class="ratio ratio-16x9">
+            <iframe src="{{ video.video_url }}" title="{{ video.title }}" frameborder="0" allowfullscreen></iframe>
+          </div>
+        {% else %}
+          <div class="ratio ratio-16x9">
+            <div class="d-flex align-items-center justify-content-center bg-light border rounded" style="height: 315px;">
+              <div class="text-center">
+                <i class="bi bi-film fs-1 text-muted"></i>
+                <p class="mt-2 text-muted">Видео "{{ video.title }}"</p>
+                <p class="text-muted small">Доступно в ближайшее время</p>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      {% else %}
+        <p>Ошибка: Видео для этого модуля не найдено.</p>
+      {% endif %}
+    {% else %}
+      <p>Тип модуля "{{ module.type }}" не поддерживается.</p>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  // Логика drag-and-drop для формы сдачи файла (если тип == assignment и нет test_data)
+  const dropzoneModule = document.getElementById('dropzone-module');
+  const fileInputModule = document.getElementById('file-input-module');
+
+  if (dropzoneModule && fileInputModule) {
+    dropzoneModule.addEventListener('click', () => fileInputModule.click());
+
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropzoneModule.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+      if (['dragenter', 'dragover', 'dragleave', 'drop'].includes(e.type)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzoneModule.addEventListener(eventName, highlight, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzoneModule.addEventListener(eventName, unhighlight, false);
+    });
+
+    function highlight() {
+      dropzoneModule.style.borderColor = '#4361ee';
+      dropzoneModule.style.backgroundColor = 'rgba(67, 97, 238, 0.1)';
+    }
+
+    function unhighlight() {
+      dropzoneModule.style.borderColor = '#adb5bd';
+      dropzoneModule.style.backgroundColor = '';
+    }
+
+    dropzoneModule.addEventListener('drop', handleDrop, false);
+
+    function handleDrop(e) {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files.length > 0) {
+        fileInputModule.files = files;
+        dropzoneModule.querySelector('p').textContent = files[0].name;
+      }
+    }
+  }
+</script>
+
+{% endblock %}

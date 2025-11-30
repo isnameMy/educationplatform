@@ -1,15 +1,17 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-venv/
-.env
+*.py[cod]
+*$py.class
 
-# База данных (локальная)
+# Virtual environments
+venv/
+.venv/
+
+# Database
 db.sqlite
 
-# Загрузки
+# Uploads (если не хочешь заливать, но для хакатона можно)
 uploads/
 
-# IDE
-.vscode/
-.idea/
+# Environment variables
+.env

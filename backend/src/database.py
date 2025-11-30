@@ -7,7 +7,7 @@ from .models import Base
 SQLALCHEMY_DATABASE_URL = "sqlite:///./db.sqlite"
 
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
+    SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False}  # для SQLite в одном потоке
 )
 
