@@ -23,7 +23,7 @@ app = FastAPI()
 
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 
-templates = Jinja2Templates(directory="../frontend/templates")
+templates = Jinja2Templates(directory="frontend/templates")
 templates.env.filters['from_json'] = from_json # <-- Регистрируем фильтр
 
 
@@ -32,8 +32,8 @@ UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 # Раздаём статику и загрузки
-app.mount("/static", StaticFiles(directory="../frontend/static"), name="static")
-app.mount("/uploads", StaticFiles(directory="../frontend/uploads"), name="uploads")
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+app.mount("/uploads", StaticFiles(directory="frontend/uploads"), name="uploads")
 
 def get_db():
     db = SessionLocal()

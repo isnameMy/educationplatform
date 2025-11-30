@@ -1,7 +1,7 @@
 # seed_data.py
 from sqlalchemy.orm import sessionmaker
-from src.database import engine, Base
-from src.models import User, Course, Module, Assignment, Video, Submission, Enrollment
+from .database import engine, Base
+from .models import User, Course, Module, Assignment, Video, Submission, Enrollment
 import datetime
 import os
 import json # <-- Новый импорт
